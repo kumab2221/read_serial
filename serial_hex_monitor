@@ -1,0 +1,137 @@
+# usage
+# python serial_hex_monitor.py --port COM3 --baud 115200 --base hex
+
+import serial
+import argparse
+import sys
+from datetime import datetime
+
+BYTES_PER_LINE = 24
+def str_to_bool(value: str) -> bool:
+    v = value.strip().lower()
+    if v in ("on", "true", "1", "yes", "y"):
+        return True
+    if v in ("off", "false", "0", "no", "n"):
+        return False
+    raise argparse.ArgumentTypeError("Use on/off, true/false, 1/0, yes/no")
+
+
+def format_hex_ascii(data: bytes, width: int = BYTES_PER_LINE, base: str = "hex") -> str:
+    if base == "hex":
+        value_part = " ".join(f"{b:02X}" for b in data)
+        value_width = width * 3 - 1
+    elif base == "bin":
+        value_part = " ".join(f"{b:08b}" for b in data)
+        value_width = width * 9 - 1
+    else:
+        raise ValueError("base must be 'hex' or 'bin'")
+
+    ascii_part = "".join(chr(b) if 32 <= b <= 126 else "." for b in data)
+    return f"{value_part:<{value_width}}  |{ascii_part}|"
+
+
+def invert_bytes(data: bytes) -> bytes:
+    return bytes((~b) & 0xFF for b in data)
+
+
+def shift_bitstream(data: bytes, shift: int) -> bytes:
+    if not data or shift == 0:
+        return data
+
+    bit_len = len(data) * 8
+    value = int.from_bytes(data, byteorder="big", signed=False)
+    mask = (1 << bit_len) - 1
+
+    if shift > 0:
+        value = (value << shift) & mask
+    else:
+        value = value >> (-shift)
+
+    return value.to_bytes(len(data), byteorder="big")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Serial monitor with HEX/BIN output")
+    parser.add_argument("--port", default="COM3", help="Serial port")
+    parser.add_argument("--baud", type=int, default=115200, help="Baud rate")
+    parser.add_argument("--bytesize", type=int, default=8, choices=[5, 6, 7, 8], help="Data bits")
+    parser.add_argument("--parity", default="N", choices=["N", "E", "O", "M", "S"], help="Parity")
+    parser.add_argument("--stopbits", type=float, default=1, choices=[1, 1.5, 2], help="Stop bits")
+    parser.add_argument("--timeout", type=float, default=0.1, help="Read timeout")
+    parser.add_argument("--chunk", type=int, default=BYTES_PER_LINE, help="Bytes per line")
+    parser.add_argument("--inv", type=str_to_bool, default=False, help="Invert bits: on/off")
+    parser.add_argument("--bitshift", type=int, choices=[-1, 0, 1], default=0,
+                        help="Bitstream shift: -1=right, 0=none, 1=left")
+    parser.add_argument("--base", choices=["hex", "bin"], default="hex",
+                        help="Display format: hex or bin")
+    parser.add_argument("--raw", action="store_true", help="Show raw data too")
+    args = parser.parse_args()
+
+    parity_map = {
+        "N": serial.PARITY_NONE,
+        "E": serial.PARITY_EVEN,
+        "O": serial.PARITY_ODD,
+        "M": serial.PARITY_MARK,
+        "S": serial.PARITY_SPACE,
+    }
+
+    stopbits_map = {
+        1: serial.STOPBITS_ONE,
+        1.5: serial.STOPBITS_ONE_POINT_FIVE,
+        2: serial.STOPBITS_TWO,
+    }
+
+    try:
+        with serial.Serial(
+            port=args.port,
+            baudrate=args.baud,
+            bytesize=args.bytesize,
+            parity=parity_map[args.parity],
+            stopbits=stopbits_map[args.stopbits],
+            timeout=args.timeout,
+        ) as ser:
+            print(f"Listening on {args.port} @ {args.baud} bps")
+            print(f"Bytes per line: {args.chunk}")
+            print(f"Invert: {'ON' if args.inv else 'OFF'}")
+            print(f"Bitshift: {args.bitshift}")
+            print(f"Display base: {args.base}")
+            print("Press Ctrl+C to stop.\n")
+
+            while True:
+                data = ser.read(args.chunk)
+                if data:
+                    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
+                    if args.raw:
+                        print(f"[{timestamp}] RAW : {format_hex_ascii(data, args.chunk, args.base)}")
+
+                    out_data = data
+
+                    if args.inv:
+                        out_data = invert_bytes(out_data)
+
+                    if args.bitshift != 0:
+                        out_data = shift_bitstream(out_data, args.bitshift)
+
+                    label = "HEX"
+                    if args.base == "bin":
+                        label = "BIN"
+
+                    if args.inv and args.bitshift == 0:
+                        label = f"INV_{label}"
+                    elif (not args.inv) and args.bitshift != 0:
+                        label = f"SHIFT{args.bitshift:+d}_{label}"
+                    elif args.inv and args.bitshift != 0:
+                        label = f"INV_SHIFT{args.bitshift:+d}_{label}"
+
+                    print(f"[{timestamp}] {label}: {format_hex_ascii(out_data, args.chunk, args.base)}")
+
+    except serial.SerialException as e:
+        print(f"Serial error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("\nStopped.")
+
+
+if __name__ == "__main__":
+    main()
