@@ -27,7 +27,7 @@ def temp_to_raw(temp_c: float):
     """
     温度(℃) -> Q8.8 raw値（オフセット -25℃）
     """
-    raw = int((temp_c + 25.0) * 256)
+    raw = int(temp_c)
     return raw & 0xFFFF
 
 # =========================
@@ -72,15 +72,15 @@ with serial.Serial(PORT, BAUDRATE, timeout=1) as ser:
     while True:
         frame = make_frame(
             gyro_x=0,
-            gyro_y=10,
-            gyro_z=0,
+            gyro_y=0,
+            gyro_z=2097,
             acc_x=0,
             acc_y=0,
-            acc_z=0,
+            acc_z=0x010000,
             temp_c=0
         )
 
         ser.write(frame)
         print("Sent:", frame.hex(" "))
 
-        time.sleep(0.1)
+        time.sleep(0.001)
